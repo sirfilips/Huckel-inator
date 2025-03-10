@@ -1,4 +1,3 @@
-# Huckel-inator
 # Hückel Molecular Orbital Calculator
 
 This Python script calculates the Hückel molecular orbitals for a given molecule, based on its SMILES representation. It uses the RDKit library for cheminformatics and NumPy for numerical calculations. Matplotlib is used for plotting the energy levels.
