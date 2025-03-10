@@ -21,10 +21,11 @@ You can install the required packages using pip:
 
 ```bash
 pip install numpy rdkit matplotlib
-
+```
 ## Start
 
 To use the program open a terminal in the folder of the python file and type
 
 ```bash
 python Huckel.py
+```
