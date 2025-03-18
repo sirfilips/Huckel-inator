@@ -20,7 +20,7 @@ This Python script calculates the Hückel molecular orbitals for a given molecul
 You can install the required packages using pip:
 
 ```bash
-pip install numpy rdkit matplotlib
+pip install numpy rdkit matplotlib pubchempy
 ```
 ## Start
 
