@@ -16,6 +16,7 @@ This Python script calculates the Hückel molecular orbitals for a given molecul
 *   NumPy
 *   RDKit
 *   Matplotlib
+*   PubChemPy
 
 You can install the required packages using pip:
 
