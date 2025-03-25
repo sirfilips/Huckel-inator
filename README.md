@@ -47,9 +47,9 @@ python Huckel.py
 3. **View Results**:
    - The program will display molecular properties such as charges, bond orders, and energy levels in the terminal.
    - Use the interactive menu to:
-     - Visualize the molecular structure.
-     - Plot the molecular orbital energy levels.
-     - Save the results to a text file.
+     - Visualize the molecular structure. (1)
+     - Plot the molecular orbital energy levels. (2)
+     - Save the results to a text file. (3)
 
 4. **Exit**:
    Select the `q` option in the menu to close the program.
