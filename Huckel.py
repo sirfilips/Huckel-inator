@@ -189,11 +189,19 @@ def calculate_charges(eigenvectors, num_electrons):
     charges = np.zeros(num_atoms)
     num_occupied_orbitals = num_electrons // 2
 
+    # Calcola la somma dei quadrati dei coefficienti per gli orbitali occupati
     for i in range(num_atoms):
         for j in range(num_occupied_orbitals):
             charges[i] += eigenvectors[i, j] ** 2
 
-    charges = 1 - charges  # La carica è 1 - somma dei quadrati dei coefficienti
+    # La carica è 1 - somma dei quadrati dei coefficienti
+    charges = 1 - charges
+
+    # Normalizza le cariche per garantire che la somma sia coerente con la carica totale
+    total_charge = 0  # Cambia se la molecola ha una carica netta diversa
+    charge_correction = (total_charge - np.sum(charges)) / num_atoms
+    charges += charge_correction
+
     return charges
 
 def calculate_bond_orders(eigenvectors, num_electrons):
