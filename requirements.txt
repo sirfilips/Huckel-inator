@@ -1,0 +1,6 @@
+numpy
+rdkit
+matplotlib
+pubchempy
+tabulate
+colorama
