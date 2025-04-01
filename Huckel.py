@@ -155,8 +155,8 @@ def plot_energy_levels(eigenvalues):
     ax.set_xlim(-x_offset * len(sorted_eigenvalues) / 2, x_offset * len(sorted_eigenvalues) / 2)
 
     # Etichette e titolo
-    ax.set_ylabel('Energia (unità arbitrarie)')
-    ax.set_title('Diagramma di Aufbau dei Livelli Energetici degli Orbitali Molecolari')
+    ax.set_ylabel('Energia (unità arbitrarie di energia)')
+    ax.set_title('Diagramma dei Livelli Energetici degli Orbitali Molecolari')
     ax.set_xticks([])  # Rimuove i tick sull'asse x
     ax.invert_yaxis()  # Inverte l'asse y
 
@@ -164,22 +164,36 @@ def plot_energy_levels(eigenvalues):
 
 def visualize_molecule(smiles):
     """
-    Visualizza la molecola data dal codice SMILES.
+    Visualizza la molecola data dal codice SMILES con gli atomi numerati in modo coerente con i calcoli.
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError("SMILES non valido")
-    mol = Chem.RemoveHs(mol)  # Rimuove gli atomi di idrogeno espliciti
-    img = Draw.MolToImage(mol, size=(300, 300))
+    
+    # Rimuove gli idrogeni espliciti per mantenere coerenza con i calcoli
+    mol = Chem.RemoveHs(mol)
+
+    # Crea un dizionario per etichettare gli atomi con i loro indici
+    atom_labels = {atom.GetIdx(): str(atom.GetIdx()) for atom in mol.GetAtoms()}
+
+    # Genera l'immagine con le etichette degli atomi
+    img = Draw.MolToImage(mol, size=(300, 300), atomLabels=atom_labels)
     img.show()
 
-
 def get_iupac_name(smiles):
-    compounds = pcp.get_compounds(smiles, 'smiles')
-    if compounds:
-        return compounds[0].iupac_name
-    else:
-        return None
+    """
+    Ottiene il nome IUPAC della molecola utilizzando PubChem.
+    Gestisce eventuali errori, come la mancanza di connessione a Internet.
+    """
+    try:
+        compounds = pcp.get_compounds(smiles, 'smiles')
+        if compounds:
+            return compounds[0].iupac_name
+        else:
+            return None
+    except Exception as e:
+        print(Fore.RED + f"Errore durante il recupero del nome IUPAC: {e}" + Style.RESET_ALL)
+        return "Errore: Nome IUPAC non disponibile"
 
 def calculate_charges(eigenvectors, num_electrons):
     """
