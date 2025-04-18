@@ -8,6 +8,10 @@ from tabulate import tabulate
 import os  # Per gestire la creazione della cartella output
 from datetime import datetime  # Per ottenere la data e l'ora
 from colorama import Fore, Style
+from rdkit.Chem import rdDepictor
+from rdkit.Chem.Draw import rdMolDraw2D
+from PIL import Image
+from io import BytesIO
 
 # Definire i valori di α e β per ciascun tipo di atomo e gruppo (valori di letteratura adattati)
 alpha_values = {
@@ -38,10 +42,18 @@ beta_values = {
 def build_huckel_matrix(smiles):
     """
     Costruisce la matrice di Hückel estesa per una molecola data dal suo codice SMILES.
+    Tiene conto della carica totale e dei radicali.
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError("SMILES non valido")
+
+    # Calcola la carica totale e il numero di radicali
+    total_charge = sum(atom.GetFormalCharge() for atom in mol.GetAtoms())
+    num_radicals = sum(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms())
+
+    print(f"Carica totale della molecola: {total_charge}")
+    print(f"Numero di elettroni spaiati (radicali): {num_radicals}")
 
     # Conta gli idrogeni impliciti per ciascun atomo
     num_atoms = mol.GetNumAtoms()
@@ -86,8 +98,7 @@ def build_huckel_matrix(smiles):
                 huckel_matrix[i, j] = beta_value
                 print(f"Beta value for interaction ({atom_i}, {atom_j}) between atoms {i} and {j}: {beta_value}")
 
-    return huckel_matrix
-
+    return huckel_matrix, total_charge, num_radicals
 
 def convert_to_hartree(huckel_matrix, alpha=0, beta=-1):
     """
@@ -99,6 +110,11 @@ def convert_to_hartree(huckel_matrix, alpha=0, beta=-1):
 def solve_huckel(hartree_matrix):
     """ Risolve l'equazione di Hückel restituendo gli autovalori e autovettori. """
     eigenvalues, eigenvectors = np.linalg.eigh(hartree_matrix)
+
+    # Ordina gli autovalori in ordine decrescente e riordina gli autovettori di conseguenza
+    sorted_indices = np.argsort(eigenvalues)[::-1]  # Indici per ordine decrescente
+    eigenvalues = eigenvalues[sorted_indices]
+    eigenvectors = eigenvectors[:, sorted_indices]
     return eigenvalues, eigenvectors
 
 def plot_energy_levels(eigenvalues):
@@ -108,8 +124,8 @@ def plot_energy_levels(eigenvalues):
     """
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    # Ordina gli autovalori in ordine crescente
-    sorted_eigenvalues = np.sort(eigenvalues)
+    # Ordina gli autovalori in ordine decrescente
+    sorted_eigenvalues = np.sort(eigenvalues)[::-1]
 
     # Grafico dei livelli energetici
     x_offset = 0.1  # Offset orizzontale per separare gli orbitali degeneri
@@ -124,11 +140,13 @@ def plot_energy_levels(eigenvalues):
                 for j in range(degenerate_count):
                     x_position = (j - (degenerate_count - 1) / 2) * x_offset
                     ax.plot([x_position, x_position + 0.05], [current_energy, current_energy], 'k-', lw=2)
-                    ax.text(x_position + 0.06, current_energy, f'OM {i - degenerate_count + j + 1}', verticalalignment='center', fontsize=10, color='black')
+                    ax.text(x_position + 0.06, current_energy, f'OM {i - degenerate_count + j + 1}',
+                            verticalalignment='center', fontsize=10, color='black')
             elif degenerate_count == 1:
                 x_position = 0
                 ax.plot([x_position, x_position + 0.05], [current_energy, current_energy], 'k-', lw=2)
-                ax.text(x_position + 0.06, current_energy, f'OM {i}', verticalalignment='center', fontsize=10, color='black')
+                ax.text(x_position + 0.06, current_energy, f'OM {i}',
+                        verticalalignment='center', fontsize=10, color='black')
 
             current_energy = energy
             degenerate_count = 0
@@ -142,11 +160,13 @@ def plot_energy_levels(eigenvalues):
         for j in range(degenerate_count):
             x_position = (j - (degenerate_count - 1) / 2) * x_offset
             ax.plot([x_position, x_position + 0.05], [current_energy, current_energy], 'k-', lw=2)
-            ax.text(x_position + 0.06, current_energy, f'OM {len(sorted_eigenvalues) - degenerate_count + j + 1}', verticalalignment='center', fontsize=10, color='black')
+            ax.text(x_position + 0.06, current_energy, f'OM {len(sorted_eigenvalues) - degenerate_count + j + 1}',
+                    verticalalignment='center', fontsize=10, color='black')
     elif degenerate_count == 1:
         x_position = 0
         ax.plot([x_position, x_position + 0.05], [current_energy, current_energy], 'k-', lw=2)
-        ax.text(x_position + 0.06, current_energy, f'OM {len(sorted_eigenvalues)}', verticalalignment='center', fontsize=10, color='black')
+        ax.text(x_position + 0.06, current_energy, f'OM {len(sorted_eigenvalues)}',
+                verticalalignment='center', fontsize=10, color='black')
 
     # Imposta i limiti dell'asse y in base ai valori minimi e massimi degli autovalori
     ax.set_ylim(min(sorted_eigenvalues) - 0.5, max(sorted_eigenvalues) + 0.5)
@@ -283,6 +303,74 @@ def save_results_to_txt(smiles, iupac_name, charges, electron_density, bond_orde
 
     print(f"Risultati salvati in: {filepath}")
 
+def plot_orbital_phases(eigenvectors):
+    """
+    Visualizza graficamente le fasi degli orbitali molecolari.
+    Le fasi positive e negative sono rappresentate con colori diversi.
+    I grafici sono ordinati in modo che il primo corrisponda all'orbital molecolare con l'energia più bassa.
+    """
+    num_orbitals = eigenvectors.shape[1]
+    num_atoms = eigenvectors.shape[0]
+
+    # Inverti l'ordine degli orbitali per partire dal più basso
+    eigenvectors = eigenvectors[:, ::-1]
+
+    fig, axes = plt.subplots(num_orbitals, 1, figsize=(8, 2 * num_orbitals), sharex=True)
+    if num_orbitals == 1:
+        axes = [axes]  # Assicura che `axes` sia sempre una lista
+
+    for i, ax in enumerate(axes):
+        orbital = eigenvectors[:, i]
+        colors = ['blue' if coeff >= 0 else 'red' for coeff in orbital]
+        ax.bar(range(num_atoms), orbital, color=colors, edgecolor='black')
+        # Aggiorna il titolo per riflettere l'ordine corretto
+        ax.set_title(f"Orbital Molecolare OM {num_orbitals - i} (OM{num_orbitals - i})")
+        ax.set_ylabel("Coefficiente")
+        ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+
+    plt.xlabel("Indice dell'atomo")
+    plt.tight_layout()
+    plt.show()
+
+def visualize_orbitals_on_molecule(smiles, eigenvectors, orbital_index):
+    """
+    Visualizza la molecola con le fasi degli orbitali molecolari sovrapposte.
+    Le fasi positive e negative sono rappresentate con gradienti di colore sugli atomi.
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError("SMILES non valido")
+    
+    # Rimuove gli idrogeni espliciti per mantenere coerenza con i calcoli
+    mol = Chem.RemoveHs(mol)
+    
+    # Genera le coordinate 2D per la molecola
+    rdDepictor.Compute2DCoords(mol)
+    
+    # Ottieni i coefficienti dell'orbitale selezionato
+    orbital_coefficients = eigenvectors[:, orbital_index]
+    
+    # Normalizza i coefficienti per mappare i valori su una scala di colori
+    max_coeff = max(abs(orbital_coefficients))
+    normalized_coefficients = orbital_coefficients / max_coeff
+    
+    # Crea un dizionario per mappare i colori agli atomi
+    atom_colors = {}
+    for i, coeff in enumerate(normalized_coefficients):
+        if coeff > 0:
+            atom_colors[i] = (1.0, 0.0, 0.0)  # Rosso per fasi positive
+        else:
+            atom_colors[i] = (0.0, 0.0, 1.0)  # Blu per fasi negative
+    
+    # Disegna la molecola con i colori degli atomi
+    drawer = rdMolDraw2D.MolDraw2DCairo(500, 500)
+    drawer.DrawMolecule(mol, highlightAtoms=list(atom_colors.keys()), highlightAtomColors=atom_colors)
+    drawer.FinishDrawing()
+    
+    # Converti l'immagine in un formato visualizzabile senza salvarla su disco
+    img_data = drawer.GetDrawingText()
+    img = Image.open(BytesIO(img_data))
+    img.show()
 
 def main():
     print(Fore.GREEN + r"""
@@ -295,7 +383,7 @@ def main():
     smiles = input(Fore.YELLOW + "Inserisci il codice SMILES della molecola: " + Style.RESET_ALL)
     try:
         print(Fore.MAGENTA + "\n--- Costruzione della matrice di Hückel ---" + Style.RESET_ALL)
-        huckel_matrix = build_huckel_matrix(smiles)
+        huckel_matrix, total_charge, num_radicals = build_huckel_matrix(smiles)
         hartree_matrix = convert_to_hartree(huckel_matrix)
         eigenvalues, eigenvectors = solve_huckel(hartree_matrix)
 
@@ -331,14 +419,21 @@ def main():
                     print(f"Legame {i}-{j}: {bond_orders[i, j]:.3f}")
 
         print(Fore.MAGENTA + "\n--- Matrice di Hückel (in notazione di Hartree) ---" + Style.RESET_ALL)
-        print(huckel_matrix)
+        print(hartree_matrix)
+
+        eigenvalues, eigenvectors = np.linalg.eigh(hartree_matrix)
+
+        # Ordina gli autovalori in ordine decrescente e riordina gli autovettori di conseguenza
+        sorted_indices = np.argsort(eigenvalues)[::-1]  # Indici per ordine decrescente
+        eigenvalues = eigenvalues[sorted_indices]
+        eigenvectors = eigenvectors[:, sorted_indices]
 
         print(Fore.MAGENTA + "\n--- Autovalori (Livelli energetici) ---" + Style.RESET_ALL)
         print(eigenvalues)
 
         print(Fore.MAGENTA + "\n--- Autovettori (Coefficienti degli orbitali molecolari) ---" + Style.RESET_ALL)
         for i, eigenvector in enumerate(eigenvectors.T):
-            rounded_vector = np.round(eigenvector, 3)
+            rounded_vector = np.round(eigenvector, 3)  # Arrotonda i valori a 3 cifre decimali
             print(f"OM {i + 1}: {rounded_vector}")
 
         # Menù interattivo
@@ -347,6 +442,8 @@ def main():
             print("1. Visualizza la struttura della molecola")
             print("2. Visualizza il diagramma degli orbitali molecolari (OM)")
             print("3. Salva i risultati in un file")
+            print("4. Visualizza le fasi degli orbitali molecolari")
+            print("5. Visualizza gli orbitali molecolari sulla molecola")
             print("q. Chiudi il programma")
             choice = input(Fore.YELLOW + "Scegli un'opzione: " + Style.RESET_ALL)
 
@@ -368,6 +465,19 @@ def main():
                     eigenvalues,
                     eigenvectors,
                 )
+            elif choice == "4":
+                print(Fore.MAGENTA + "\n--- Visualizzazione delle fasi degli orbitali molecolari ---" + Style.RESET_ALL)
+                plot_orbital_phases(eigenvectors)
+            elif choice == "5":
+                print(Fore.MAGENTA + "\n--- Visualizzazione degli orbitali molecolari sulla molecola ---" + Style.RESET_ALL)
+                try:
+                    orbital_index = int(input(Fore.YELLOW + "Inserisci il numero dell'orbitale molecolare (OM) da visualizzare (1-based): " + Style.RESET_ALL)) - 1
+                    if 0 <= orbital_index < eigenvectors.shape[1]:
+                        visualize_orbitals_on_molecule(smiles, eigenvectors, orbital_index)
+                    else:
+                        print(Fore.RED + "Indice non valido. Riprova." + Style.RESET_ALL)
+                except ValueError:
+                    print(Fore.RED + "Inserisci un numero valido." + Style.RESET_ALL)
             elif choice == "q":
                 print(Fore.RED + "Chiusura del programma..." + Style.RESET_ALL)
                 break
