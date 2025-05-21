@@ -41,64 +41,64 @@ beta_values = {
 
 def build_huckel_matrix(smiles):
     """
-    Costruisce la matrice di Hückel estesa per una molecola data dal suo codice SMILES.
-    Tiene conto della carica totale e dei radicali.
+    Costruisce la matrice di Hückel estesa per il sistema π di interesse in una molecola data dal suo codice SMILES.
+    I gruppi sostituenti sono trattati come unità singole con valori di α e β definiti.
+    Gli atomi radicalici adiacenti a doppi legami o legami aromatici sono inclusi nel sistema π.
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError("SMILES non valido")
 
-    # Calcola la carica totale e il numero di radicali
-    total_charge = sum(atom.GetFormalCharge() for atom in mol.GetAtoms())
-    num_radicals = sum(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms())
+    mol = Chem.RemoveHs(mol)
+    debug_atom_connections(mol)
 
-    print(f"Carica totale della molecola: {total_charge}")
-    print(f"Numero di elettroni spaiati (radicali): {num_radicals}")
+    # Identifica gli atomi del sistema π (doppi legami coniugati o aromatici)
+    pi_system_atoms = set()
+    for bond in mol.GetBonds():
+        if bond.GetBondType() in [Chem.rdchem.BondType.DOUBLE, Chem.rdchem.BondType.AROMATIC]:
+            pi_system_atoms.add(bond.GetBeginAtomIdx())
+            pi_system_atoms.add(bond.GetEndAtomIdx())
 
-    # Conta gli idrogeni impliciti per ciascun atomo
-    num_atoms = mol.GetNumAtoms()
-    hydrogen_counts = []
-    for i in range(num_atoms):
-        atom = mol.GetAtomWithIdx(i)
-        num_hydrogens = atom.GetTotalNumHs()  # Conta gli idrogeni impliciti
-        hydrogen_counts.append(num_hydrogens)
-        print(f"Atom {i} ({atom.GetSymbol()}) has {num_hydrogens} hydrogen neighbors")
+    # Includi atomi radicalici adiacenti a doppi legami o aromatici nel sistema π
+    for atom in mol.GetAtoms():
+        if atom.GetNumRadicalElectrons() > 0:
+            if any(neigh.GetIdx() in pi_system_atoms for neigh in atom.GetNeighbors()):
+                pi_system_atoms.add(atom.GetIdx())
 
-    mol = Chem.RemoveHs(mol)  # Rimuove gli atomi di idrogeno espliciti
+    # Creazione della matrice di Hückel per il sistema π
     adj_matrix = rdmolops.GetAdjacencyMatrix(mol)
-    num_atoms = adj_matrix.shape[0]
-
-    # Creazione della matrice di Hückel
+    num_atoms = len(pi_system_atoms)
     huckel_matrix = np.zeros((num_atoms, num_atoms))
-    for i in range(num_atoms):
-        atom_i = mol.GetAtomWithIdx(i).GetSymbol()
-        num_hydrogens = hydrogen_counts[i]
+    pi_system_atoms = sorted(pi_system_atoms)  # Ordina gli indici degli atomi
 
-        if atom_i == 'C' and num_hydrogens == 3:
-            atom_i = 'CH3'
-            print(f"Carbon atom {i} is part of a methyl group (CH3)")
+    atom_mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(pi_system_atoms)}
 
+    for i, old_idx_i in enumerate(pi_system_atoms):
+        atom_i = mol.GetAtomWithIdx(old_idx_i).GetSymbol()
         alpha_value = alpha_values.get(atom_i, 0.0)
-        if callable(alpha_value):
-            huckel_matrix[i, i] = alpha_value(alpha=0, beta=-1)
-        else:
-            huckel_matrix[i, i] = alpha_value
-        print(f"Alpha value for atom {i} ({atom_i}): {huckel_matrix[i, i]}")
+        huckel_matrix[i, i] = alpha_value
 
-        for j in range(num_atoms):
-            if adj_matrix[i, j] == 1:
-                atom_j = mol.GetAtomWithIdx(j).GetSymbol()
-                num_hydrogens_j = hydrogen_counts[j]
-
-                if atom_j == 'C' and num_hydrogens_j == 3:
-                    atom_j = 'CH3'
-                    print(f"Carbon atom {j} is part of a methyl group (CH3)")
-
+        for j, old_idx_j in enumerate(pi_system_atoms):
+            if adj_matrix[old_idx_i, old_idx_j] == 1 and i != j:
+                atom_j = mol.GetAtomWithIdx(old_idx_j).GetSymbol()
                 beta_value = beta_values.get((atom_i, atom_j), beta_values.get((atom_j, atom_i), -1.0))
                 huckel_matrix[i, j] = beta_value
-                print(f"Beta value for interaction ({atom_i}, {atom_j}) between atoms {i} and {j}: {beta_value}")
 
-    return huckel_matrix, total_charge, num_radicals
+    # Aggiunge l'effetto dei sostituenti come correzione ai valori di α
+    for i, old_idx in enumerate(pi_system_atoms):
+        atom = mol.GetAtomWithIdx(old_idx)
+        substituents = []
+        for neighbor in atom.GetNeighbors():
+            # Non considera come sostituente un atomo radicalico incluso nel sistema π
+            if neighbor.GetIdx() not in pi_system_atoms:
+                substituent = neighbor.GetSymbol()
+                substituent_alpha = alpha_values.get(substituent, 0.0)
+                huckel_matrix[i, i] += substituent_alpha
+                substituents.append(f"{substituent} (α = {substituent_alpha})")
+        if substituents:
+            print(f"Atomo {old_idx} ({atom.GetSymbol()}) ha i seguenti sostituenti: {', '.join(substituents)}")
+
+    return huckel_matrix
 
 def convert_to_hartree(huckel_matrix, alpha=0, beta=-1):
     """
@@ -231,10 +231,11 @@ def calculate_charges(eigenvectors, num_electrons):
     # La carica è 1 - somma dei quadrati dei coefficienti
     charges = 1 - charges
 
-    # Normalizza le cariche per garantire che la somma sia coerente con la carica totale
+    # Normalizza le cariche solo se num_atoms > 0
     total_charge = 0  # Cambia se la molecola ha una carica netta diversa
-    charge_correction = (total_charge - np.sum(charges)) / num_atoms
-    charges += charge_correction
+    if num_atoms > 0:
+        charge_correction = (total_charge - np.sum(charges)) / num_atoms
+        charges += charge_correction
 
     return charges
 
@@ -286,15 +287,15 @@ def save_results_to_txt(smiles, iupac_name, charges, electron_density, bond_orde
         file.write(f"Nome IUPAC: {iupac_name if iupac_name else 'Non trovato'}\n\n")
         file.write("Cariche sugli atomi di carbonio:\n")
         for i, charge in enumerate(charges):
-            file.write(f"Atomo {i}: {charge:.3f}\n")
+            file.write(f"Atomo {i+1}: {charge:.3f}\n")  # <-- parte da 1
         file.write("\nDensità elettronica su ogni atomo:\n")
         for i, density in enumerate(electron_density):
-            file.write(f"Atomo {i}: {density:.3f}\n")
+            file.write(f"Atomo {i+1}: {density:.3f}\n")  # <-- parte da 1
         file.write("\nOrdini di legame:\n")
         for i in range(bond_orders.shape[0]):
             for j in range(i + 1, bond_orders.shape[1]):
                 if bond_orders[i, j] != 0:
-                    file.write(f"Legame {i}-{j}: {bond_orders[i, j]:.3f}\n")
+                    file.write(f"Legame {i+1}-{j+1}: {bond_orders[i, j]:.3f}\n")  # <-- parte da 1
         file.write("\nAutovalori (Livelli energetici):\n")
         file.write(", ".join(f"{val:.3f}" for val in eigenvalues) + "\n")
         file.write("\nAutovettori (Coefficienti degli orbitali molecolari):\n")
@@ -341,9 +342,21 @@ def visualize_orbitals_on_molecule(smiles, eigenvectors, orbital_index):
     if mol is None:
         raise ValueError("SMILES non valido")
     
-    # Rimuove gli idrogeni espliciti per mantenere coerenza con i calcoli
     mol = Chem.RemoveHs(mol)
     
+    # Identifica gli atomi del sistema π (stessa logica di build_huckel_matrix)
+    pi_system_atoms = set()
+    for bond in mol.GetBonds():
+        if bond.GetBondType() in [Chem.rdchem.BondType.DOUBLE, Chem.rdchem.BondType.AROMATIC]:
+            pi_system_atoms.add(bond.GetBeginAtomIdx())
+            pi_system_atoms.add(bond.GetEndAtomIdx())
+    # Includi atomi radicalici adiacenti a doppi legami o aromatici nel sistema π
+    for atom in mol.GetAtoms():
+        if atom.GetNumRadicalElectrons() > 0:
+            if any(neigh.GetIdx() in pi_system_atoms for neigh in atom.GetNeighbors()):
+                pi_system_atoms.add(atom.GetIdx())
+    pi_system_atoms = sorted(pi_system_atoms)  # Ordina gli indici degli atomi
+
     # Genera le coordinate 2D per la molecola
     rdDepictor.Compute2DCoords(mol)
     
@@ -352,15 +365,16 @@ def visualize_orbitals_on_molecule(smiles, eigenvectors, orbital_index):
     
     # Normalizza i coefficienti per mappare i valori su una scala di colori
     max_coeff = max(abs(orbital_coefficients))
-    normalized_coefficients = orbital_coefficients / max_coeff
+    normalized_coefficients = orbital_coefficients / max_coeff if max_coeff != 0 else orbital_coefficients
     
     # Crea un dizionario per mappare i colori agli atomi
     atom_colors = {}
     for i, coeff in enumerate(normalized_coefficients):
+        original_idx = pi_system_atoms[i]  # Mappa l'indice del sistema π all'indice originale
         if coeff > 0:
-            atom_colors[i] = (1.0, 0.0, 0.0)  # Rosso per fasi positive
+            atom_colors[original_idx] = (1.0, 0.0, 0.0)  # Rosso per fasi positive
         else:
-            atom_colors[i] = (0.0, 0.0, 1.0)  # Blu per fasi negative
+            atom_colors[original_idx] = (0.0, 0.0, 1.0)  # Blu per fasi negative
     
     # Disegna la molecola con i colori degli atomi
     drawer = rdMolDraw2D.MolDraw2DCairo(500, 500)
@@ -371,6 +385,107 @@ def visualize_orbitals_on_molecule(smiles, eigenvectors, orbital_index):
     img_data = drawer.GetDrawingText()
     img = Image.open(BytesIO(img_data))
     img.show()
+
+def debug_atom_connections(mol):
+    """
+    Stampa le connessioni di tutti gli atomi nella molecola, inclusi gli idrogeni impliciti,
+    i valori di α e β utilizzati, la carica totale e il numero di elettroni spaiati.
+    Ora mostra una tabella per gli atomi di carbonio.
+    """
+    print("\n--- Connessioni degli atomi e valori di α e β ---")
+    # Calcola la carica totale della molecola
+    total_formal_charge = sum(atom.GetFormalCharge() for atom in mol.GetAtoms())
+    print(f"Carica formale della molecola: {total_formal_charge}")
+    # Calcola il numero totale di elettroni spaiati
+    total_radicals = sum(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms())
+    print(f"Numero di elettroni spaiati (radicali): {total_radicals}")
+
+    # --- 1. DEBUG: tabella degli atomi di carbonio ---
+    # Prepara dati per la tabella degli atomi di carbonio
+    carbon_table = []
+    for atom in mol.GetAtoms():
+        if atom.GetSymbol() == "C":
+            atom_idx = atom.GetIdx()
+            atom_symbol = atom.GetSymbol()
+            formal_charge = atom.GetFormalCharge()
+            num_radical = atom.GetNumRadicalElectrons()
+            hydrogen_count = atom.GetTotalNumHs()
+            neighbors = [n.GetSymbol() for n in atom.GetNeighbors() if n.GetSymbol() != "H"]
+            carbon_table.append([
+                atom_idx + 1,  # <-- parte da 1
+                atom_symbol,
+                formal_charge,
+                num_radical,
+                hydrogen_count,
+                ", ".join(neighbors)
+            ])
+    if carbon_table:
+        print(tabulate(
+            carbon_table,
+            headers=["Indice", "Simbolo", "Carica formale", "Elettroni spaiati", "H legati", "Vicini"],
+            tablefmt="grid"
+        ))
+
+    # Stampa dettagli per tutti gli atomi (come prima)
+    for atom in mol.GetAtoms():
+        atom_idx = atom.GetIdx()
+        atom_symbol = atom.GetSymbol()
+        neighbors = []
+        hydrogen_count = atom.GetTotalNumHs()
+        for neighbor in atom.GetNeighbors():
+            neighbor_symbol = neighbor.GetSymbol()
+            if neighbor_symbol != "H":
+                neighbors.append(neighbor_symbol)
+        print(f"Atomo {atom_idx + 1} ({atom_symbol}) è legato a: {', '.join(neighbors)}")  # <-- parte da 1
+        if hydrogen_count > 0:
+            print(f"  {atom_symbol} ha {hydrogen_count} idrogeni legati.")
+        alpha_value = alpha_values.get(atom_symbol, 0.0)
+        print(f"  Valore di α per {atom_symbol}: {alpha_value}")
+        num_radical = atom.GetNumRadicalElectrons()
+        if num_radical > 0:
+            print(f"  {atom_symbol} ha {num_radical} elettrone/i spaiato/i (radicale).")
+        for neighbor in atom.GetNeighbors():
+            neighbor_symbol = neighbor.GetSymbol()
+            if neighbor_symbol != "H":
+                beta_value = beta_values.get((atom_symbol, neighbor_symbol), beta_values.get((neighbor_symbol, atom_symbol), None))
+                if beta_value is not None:
+                    print(f"  Valore di β per legame {atom_symbol}-{neighbor_symbol}: {beta_value}")
+    print("--- Fine connessioni e valori di α e β ---\n")
+
+def print_ascii_energy_diagram(eigenvalues):
+    """
+    Stampa un diagramma ASCII delle energie degli orbitali molecolari,
+    con trattini tra le etichette OM degeneri sulla stessa riga.
+    Le etichette OM partono dall'energia più alta (OM1) e scendono.
+    """
+    import numpy as np
+    from colorama import Fore, Style
+
+    # Ordina dal più alto al più basso
+    rounded = np.round(eigenvalues, 4)
+    idx_sorted = np.argsort(rounded)[::-1]
+    rounded = rounded[idx_sorted]
+
+    # Raggruppa OM degeneri
+    unique_energies = []
+    om_groups = []
+    om_counter = 1
+    for i, e in enumerate(rounded):
+        found = False
+        for idx, ue in enumerate(unique_energies):
+            if np.isclose(e, ue):
+                om_groups[idx].append(f"OM{om_counter}")
+                found = True
+                break
+        if not found:
+            unique_energies.append(e)
+            om_groups.append([f"OM{om_counter}"])
+        om_counter += 1
+
+    print(Fore.CYAN + "\nDiagramma ASCII delle energie degli orbitali molecolari:" + Style.RESET_ALL)
+    for energy, oms in zip(unique_energies, om_groups):
+        om_line = " ----- ".join(oms)
+        print(f"{energy:7.3f} ----- {om_line}")
 
 def main():
     print(Fore.GREEN + r"""
@@ -383,7 +498,9 @@ def main():
     smiles = input(Fore.YELLOW + "Inserisci il codice SMILES della molecola: " + Style.RESET_ALL)
     try:
         print(Fore.MAGENTA + "\n--- Costruzione della matrice di Hückel ---" + Style.RESET_ALL)
-        huckel_matrix, total_charge, num_radicals = build_huckel_matrix(smiles)
+        huckel_matrix = build_huckel_matrix(smiles)
+        if huckel_matrix.shape[0] == 0:
+            raise ValueError("Nessun atomo π trovato nella molecola. Controlla il codice SMILES o la selezione degli atomi π.")
         hartree_matrix = convert_to_hartree(huckel_matrix)
         eigenvalues, eigenvectors = solve_huckel(hartree_matrix)
 
@@ -401,22 +518,24 @@ def main():
 
         num_electrons = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() == 'C')
 
+        # --- 2. MAIN: tabelle cariche e densità elettronica ---
         print(Fore.MAGENTA + "\n--- Cariche sugli atomi di carbonio ---" + Style.RESET_ALL)
         charges = calculate_charges(eigenvectors, num_electrons)
-        charge_table = [[f"Atomo {i}", f"{charge:.3f}"] for i, charge in enumerate(charges)]
+        charge_table = [[f"Atomo {i+1}", f"{charge:.3f}"] for i, charge in enumerate(charges)]  # <-- parte da 1
         print(tabulate(charge_table, headers=["Atomo", "Carica"], tablefmt="grid"))
 
         print(Fore.MAGENTA + "\n--- Densità elettronica su ogni atomo ---" + Style.RESET_ALL)
         electron_density = calculate_electron_density(eigenvectors, num_electrons)
-        density_table = [[f"Atomo {i}", f"{density:.3f}"] for i, density in enumerate(electron_density)]
+        density_table = [[f"Atomo {i+1}", f"{density:.3f}"] for i, density in enumerate(electron_density)]  # <-- parte da 1
         print(tabulate(density_table, headers=["Atomo", "Densità elettronica"], tablefmt="grid"))
 
+        # --- 3. MAIN: stampa ordini di legame ---
         print(Fore.MAGENTA + "\n--- Ordini di legame ---" + Style.RESET_ALL)
         bond_orders = calculate_bond_orders(eigenvectors, num_electrons)
         for i in range(bond_orders.shape[0]):
             for j in range(i + 1, bond_orders.shape[1]):
                 if bond_orders[i, j] != 0:
-                    print(f"Legame {i}-{j}: {bond_orders[i, j]:.3f}")
+                    print(f"Legame {i+1}-{j+1}: {bond_orders[i, j]:.3f}")  # <-- parte da 1
 
         print(Fore.MAGENTA + "\n--- Matrice di Hückel (in notazione di Hartree) ---" + Style.RESET_ALL)
         print(hartree_matrix)
@@ -427,7 +546,7 @@ def main():
         sorted_indices = np.argsort(eigenvalues)[::-1]  # Indici per ordine decrescente
         eigenvalues = eigenvalues[sorted_indices]
         eigenvectors = eigenvectors[:, sorted_indices]
-
+        print_ascii_energy_diagram(eigenvalues)
         print(Fore.MAGENTA + "\n--- Autovalori (Livelli energetici) ---" + Style.RESET_ALL)
         print(eigenvalues)
 
@@ -444,7 +563,7 @@ def main():
             print("3. Salva i risultati in un file")
             print("4. Visualizza le fasi degli orbitali molecolari")
             print("5. Visualizza gli orbitali molecolari sulla molecola")
-            print("q. Chiudi il programma")
+            print("0. Chiudi il programma")
             choice = input(Fore.YELLOW + "Scegli un'opzione: " + Style.RESET_ALL)
 
             if choice == "1":
@@ -478,7 +597,7 @@ def main():
                         print(Fore.RED + "Indice non valido. Riprova." + Style.RESET_ALL)
                 except ValueError:
                     print(Fore.RED + "Inserisci un numero valido." + Style.RESET_ALL)
-            elif choice == "q":
+            elif choice == "0":
                 print(Fore.RED + "Chiusura del programma..." + Style.RESET_ALL)
                 break
             else:
