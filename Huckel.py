@@ -65,6 +65,12 @@ def build_huckel_matrix(smiles):
             if any(neigh.GetIdx() in pi_system_atoms for neigh in atom.GetNeighbors()):
                 pi_system_atoms.add(atom.GetIdx())
 
+    # --- NUOVO: Includi atomi carichi adiacenti al sistema π ---
+    for atom in mol.GetAtoms():
+        if atom.GetFormalCharge() != 0:
+            if any(neigh.GetIdx() in pi_system_atoms for neigh in atom.GetNeighbors()):
+                pi_system_atoms.add(atom.GetIdx())
+
     # Creazione della matrice di Hückel per il sistema π
     adj_matrix = rdmolops.GetAdjacencyMatrix(mol)
     num_atoms = len(pi_system_atoms)
@@ -218,21 +224,20 @@ def get_iupac_name(smiles):
 def calculate_charges(eigenvectors, num_electrons):
     """
     Calcola la carica su ogni atomo di carbonio.
+    Ora usa la densità elettronica corretta (2 elettroni per orbitale occupato,
+    +1 per orbitale singolarmente occupato se num_electrons è dispari).
     """
+    # Usa la funzione di densità per ottenere le popolazioni atomiche π
+    population = calculate_electron_density(eigenvectors, num_electrons)
+
+    # Presa di riferimento: 1 elettrone π per atomo (se vuoi altro riferimento, cambiare qui)
     num_atoms = eigenvectors.shape[0]
-    charges = np.zeros(num_atoms)
-    num_occupied_orbitals = num_electrons // 2
+    reference = 1.0
 
-    # Calcola la somma dei quadrati dei coefficienti per gli orbitali occupati
-    for i in range(num_atoms):
-        for j in range(num_occupied_orbitals):
-            charges[i] += eigenvectors[i, j] ** 2
+    charges = reference - population
 
-    # La carica è 1 - somma dei quadrati dei coefficienti
-    charges = 1 - charges
-
-    # Normalizza le cariche solo se num_atoms > 0
-    total_charge = 0  # Cambia se la molecola ha una carica netta diversa
+    # Correzione per carica totale (se necessario)
+    total_charge = 0  # cambiare se la molecola ha carica netta diversa
     if num_atoms > 0:
         charge_correction = (total_charge - np.sum(charges)) / num_atoms
         charges += charge_correction
@@ -242,30 +247,49 @@ def calculate_charges(eigenvectors, num_electrons):
 def calculate_bond_orders(eigenvectors, num_electrons):
     """
     Calcola l'ordine di legame di tutti i legami.
+    Usa l'espressione: BO_ij = 2 * sum_{occupati} c_i,k * c_j,k
+    Se num_electrons è dispari aggiunge il contributo 1 * c_i,last * c_j,last.
     """
     num_atoms = eigenvectors.shape[0]
     bond_orders = np.zeros((num_atoms, num_atoms))
-    num_occupied_orbitals = num_electrons // 2
 
+    num_full_orbitals = num_electrons // 2
+    has_half = (num_electrons % 2) == 1
     for i in range(num_atoms):
         for j in range(i + 1, num_atoms):
-            for k in range(num_occupied_orbitals):
-                bond_orders[i, j] += eigenvectors[i, k] * eigenvectors[j, k]
-            bond_orders[j, i] = bond_orders[i, j]
+            bo = 0.0
+            # contributo orbitalmente doppi
+            for k in range(num_full_orbitals):
+                bo += 2.0 * eigenvectors[i, k] * eigenvectors[j, k]
+            # contributo eventuale orbitale singolarmente occupato
+            if has_half:
+                bo += 1.0 * eigenvectors[i, num_full_orbitals] * eigenvectors[j, num_full_orbitals]
+            bond_orders[i, j] = bo
+            bond_orders[j, i] = bo
 
     return bond_orders
 
 def calculate_electron_density(eigenvectors, num_electrons):
     """
     Calcola la densità elettronica totale su ogni atomo.
+    Densità = 2 * sum_{orbitali doppi occupati} c_i,k^2 + 1 * (se c'è un orbitale singolarmente occupato) c_i,last^2
     """
     num_atoms = eigenvectors.shape[0]
     density = np.zeros(num_atoms)
-    num_occupied_orbitals = num_electrons // 2
 
+    num_full_orbitals = num_electrons // 2
+    has_half = (num_electrons % 2) == 1
+
+    # contributo degli orbitali doppi
     for i in range(num_atoms):
-        for j in range(num_occupied_orbitals):
-            density[i] += eigenvectors[i, j] ** 2
+        for j in range(num_full_orbitals):
+            density[i] += 2.0 * eigenvectors[i, j] ** 2
+
+    # contributo dell'eventuale orbitale singolarmente occupato
+    if has_half:
+        half_idx = num_full_orbitals
+        for i in range(num_atoms):
+            density[i] += 1.0 * eigenvectors[i, half_idx] ** 2
 
     return density
 
@@ -353,6 +377,11 @@ def visualize_orbitals_on_molecule(smiles, eigenvectors, orbital_index):
     # Includi atomi radicalici adiacenti a doppi legami o aromatici nel sistema π
     for atom in mol.GetAtoms():
         if atom.GetNumRadicalElectrons() > 0:
+            if any(neigh.GetIdx() in pi_system_atoms for neigh in atom.GetNeighbors()):
+                pi_system_atoms.add(atom.GetIdx())
+    # --- NUOVO: Includi atomi carichi adiacenti al sistema π ---
+    for atom in mol.GetAtoms():
+        if atom.GetFormalCharge() != 0:
             if any(neigh.GetIdx() in pi_system_atoms for neigh in atom.GetNeighbors()):
                 pi_system_atoms.add(atom.GetIdx())
     pi_system_atoms = sorted(pi_system_atoms)  # Ordina gli indici degli atomi
